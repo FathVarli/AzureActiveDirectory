@@ -1,6 +1,7 @@
 using AzureExternalDirectory.Application.AuthService;
 using AzureExternalDirectory.Application.GroupService;
 using AzureExternalDirectory.Application.UserService;
+using AzureExternalDirectory.Infrastructure.GraphService;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
@@ -27,6 +28,8 @@ namespace AzureExternalDirectory
             {
                 c.SwaggerDoc("v1", new OpenApiInfo { Title = "AzureExternalDirectory", Version = "v1" });
             });
+
+            services.AddGraphServices(Configuration);
             
             // Services'leri scoped olarak kaydet
             services.AddScoped<IUserGraphService, UserGraphService>();
