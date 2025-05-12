@@ -1,0 +1,10 @@
+﻿namespace AzureExternalDirectory.Infrastructure.GraphService.Model
+{
+    public class GroupFilterOptions
+    {
+        public int? Top { get; set; }
+        public string Filter { get; set; }
+        public string Search { get; set; }
+        public string OrderBy { get; set; }
+    }
+}
