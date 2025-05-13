@@ -12,7 +12,7 @@ using Microsoft.Graph.Models;
 
 namespace AzureExternalDirectory.Application.GroupService
 {
- public class GraphGroupService : IGroupGraphService
+    public class GraphGroupService : IGroupGraphService
     {
         private readonly IGraphServiceFactory _graphServiceFactory;
         private readonly AzureAdConfiguration _azureAdConfiguration;
@@ -28,13 +28,17 @@ namespace AzureExternalDirectory.Application.GroupService
             _logger = logger;
         }
 
-        // 1. Sistemdeki bütün grupları veya belirli bir filtreye göre çeken
-        public async Task<List<GroupDto>> GetAllGroupsAsync(GroupFilterOptions? filter = null)
+        // 1. Sistemdeki bütün grupları veya belirli bir filtreye göre çeken (parametrik select/expand)
+        public async Task<List<GroupDto>> GetAllGroupsAsync(GroupFilterOptions? filter = null, GraphQueryOptions? queryOptions = null)
         {
             GraphServiceClient? client = null;
             try
             {
-                _logger.LogInformation("Gruplar getiriliyor. Filter: {@Filter}", filter);
+                // QueryOptions öncelik sırası: parametre > filter.QueryOptions > default
+                var resolvedQueryOptions = queryOptions ?? filter?.GetQueryOptionsOrDefault() ?? new GraphQueryOptions();
+                
+                _logger.LogInformation("Gruplar getiriliyor. Filter: {@Filter}, Select: {@Select}, Expand: {@Expand}", 
+                    filter, resolvedQueryOptions.Select, resolvedQueryOptions.Expand);
 
                 client = await _graphServiceFactory.CreateSystemClientAsync(_azureAdConfiguration);
 
@@ -53,7 +57,14 @@ namespace AzureExternalDirectory.Application.GroupService
                     {
                         groups = await client.Groups.GetAsync(config =>
                         {
-                            config.QueryParameters.Select = GetGroupSelectFields();
+                            // Select alanları uygula
+                            config.QueryParameters.Select = resolvedQueryOptions.GetGroupSelectOrDefault();
+                            
+                            // Expand alanları varsa uygula
+                            if (resolvedQueryOptions.Expand?.Any() == true)
+                            {
+                                config.QueryParameters.Expand = resolvedQueryOptions.Expand;
+                            }
                             
                             if (filter != null)
                             {
@@ -109,19 +120,27 @@ namespace AzureExternalDirectory.Application.GroupService
             }
         }
 
-        // 2. ID ile grup getir
-        public async Task<GroupDto?> GetGroupByIdAsync(string groupId)
+        // 2. ID ile grup getir (parametrik select/expand)
+        public async Task<GroupDto?> GetGroupByIdAsync(string groupId, GraphQueryOptions? queryOptions = null)
         {
             GraphServiceClient? client = null;
             try
             {
-                _logger.LogInformation("Grup getiriliyor. GroupId: {GroupId}", groupId);
+                var resolvedQueryOptions = queryOptions ?? new GraphQueryOptions();
+                
+                _logger.LogInformation("Grup getiriliyor. GroupId: {GroupId}, Select: {@Select}", 
+                    groupId, resolvedQueryOptions.Select);
 
                 client = await _graphServiceFactory.CreateSystemClientAsync(_azureAdConfiguration);
 
                 var group = await client.Groups[groupId].GetAsync(config =>
                 {
-                    config.QueryParameters.Select = GetGroupSelectFields();
+                    config.QueryParameters.Select = resolvedQueryOptions.GetGroupSelectOrDefault();
+                    
+                    if (resolvedQueryOptions.Expand?.Any() == true)
+                    {
+                        config.QueryParameters.Expand = resolvedQueryOptions.Expand;
+                    }
                 });
 
                 if (group == null)
@@ -153,13 +172,16 @@ namespace AzureExternalDirectory.Application.GroupService
             }
         }
 
-        // 3. Birden fazla ID ile grupları getir
-        public async Task<List<GroupDto>> GetGroupsByIdsAsync(List<string> groupIds)
+        // 3. Birden fazla ID ile grupları getir (parametrik select/expand)
+        public async Task<List<GroupDto>> GetGroupsByIdsAsync(List<string> groupIds, GraphQueryOptions? queryOptions = null)
         {
             GraphServiceClient? client = null;
             try
             {
-                _logger.LogInformation("Birden fazla grup getiriliyor. Sayı: {Count}", groupIds.Count);
+                var resolvedQueryOptions = queryOptions ?? new GraphQueryOptions();
+                
+                _logger.LogInformation("Birden fazla grup getiriliyor. Sayı: {Count}, Select: {@Select}", 
+                    groupIds.Count, resolvedQueryOptions.Select);
 
                 client = await _graphServiceFactory.CreateSystemClientAsync(_azureAdConfiguration);
 
@@ -172,7 +194,12 @@ namespace AzureExternalDirectory.Application.GroupService
                     {
                         var group = await client.Groups[groupId].GetAsync(config =>
                         {
-                            config.QueryParameters.Select = GetGroupSelectFields();
+                            config.QueryParameters.Select = resolvedQueryOptions.GetGroupSelectOrDefault();
+                            
+                            if (resolvedQueryOptions.Expand?.Any() == true)
+                            {
+                                config.QueryParameters.Expand = resolvedQueryOptions.Expand;
+                            }
                         });
                         return group != null ? MapGroupToDto(group) : null;
                     }
@@ -203,25 +230,34 @@ namespace AzureExternalDirectory.Application.GroupService
             }
         }
 
-        // 4. Grup arama
-        public async Task<List<GroupDto>> SearchGroupsAsync(string searchTerm, int? top = null)
+        // 4. Grup arama (parametrik select/expand)
+        public async Task<List<GroupDto>> SearchGroupsAsync(string searchTerm, int? top = null, GraphQueryOptions? queryOptions = null)
         {
             if (string.IsNullOrWhiteSpace(searchTerm))
             {
                 throw new ArgumentException("Arama terimi boş olamaz", nameof(searchTerm));
             }
 
+            // Microsoft Graph search formatını kontrol et ve düzelt
+            string formattedSearchTerm = searchTerm;
+            if (!searchTerm.Contains(':'))
+            {
+                // Eğer property:value formatında değilse, displayName araması yap
+                formattedSearchTerm = $"displayName:{searchTerm}";
+            }
+
             var filter = new GroupFilterOptions
             {
-                Search = searchTerm,
-                Top = top ?? 50
+                Search = formattedSearchTerm,
+                Top = top ?? 50,
+                QueryOptions = queryOptions
             };
 
             return await GetAllGroupsAsync(filter);
         }
 
-        // 5. Bir gruba üye userları getiren
-        public async Task<List<UserDto>> GetGroupMembersAsync(string groupId)
+        // 5. Bir gruba üye userları getiren (parametrik select/expand)
+        public async Task<List<UserDto>> GetGroupMembersAsync(string groupId, GraphQueryOptions? queryOptions = null)
         {
             GraphServiceClient? client = null;
             try
@@ -230,7 +266,7 @@ namespace AzureExternalDirectory.Application.GroupService
 
                 client = await _graphServiceFactory.CreateSystemClientAsync(_azureAdConfiguration);
 
-                return await GetGroupMembersInternalAsync(client, groupId);
+                return await GetGroupMembersInternalAsync(client, groupId, queryOptions);
             }
             catch (Exception ex)
             {
@@ -246,8 +282,8 @@ namespace AzureExternalDirectory.Application.GroupService
             }
         }
 
-        // 6. Birden fazla grup ile bu gruba ait kullanıcıları getiren
-        public async Task<Dictionary<string, List<UserDto>>> GetMultipleGroupMembersAsync(List<string> groupIds)
+        // 6. Birden fazla grup ile bu gruba ait kullanıcıları getiren (parametrik select/expand)
+        public async Task<Dictionary<string, List<UserDto>>> GetMultipleGroupMembersAsync(List<string> groupIds, GraphQueryOptions? queryOptions = null)
         {
             GraphServiceClient? client = null;
             var result = new Dictionary<string, List<UserDto>>();
@@ -263,7 +299,7 @@ namespace AzureExternalDirectory.Application.GroupService
                 {
                     try
                     {
-                        var members = await GetGroupMembersInternalAsync(client, groupId);
+                        var members = await GetGroupMembersInternalAsync(client, groupId, queryOptions);
                         return new { GroupId = groupId, Members = members };
                     }
                     catch (Exception ex)
@@ -297,13 +333,16 @@ namespace AzureExternalDirectory.Application.GroupService
             }
         }
 
-        // 7. Grup sahiplerini getir
-        public async Task<List<UserDto>> GetGroupOwnersAsync(string groupId)
+        // 7. Grup sahiplerini getir (parametrik select/expand)
+        public async Task<List<UserDto>> GetGroupOwnersAsync(string groupId, GraphQueryOptions? queryOptions = null)
         {
             GraphServiceClient? client = null;
             try
             {
-                _logger.LogInformation("Grup sahipleri getiriliyor. GroupId: {GroupId}", groupId);
+                var resolvedQueryOptions = queryOptions ?? new GraphQueryOptions();
+                
+                _logger.LogInformation("Grup sahipleri getiriliyor. GroupId: {GroupId}, Select: {@Select}", 
+                    groupId, resolvedQueryOptions.Select);
 
                 client = await _graphServiceFactory.CreateSystemClientAsync(_azureAdConfiguration);
 
@@ -322,7 +361,12 @@ namespace AzureExternalDirectory.Application.GroupService
                     {
                         owners = await client.Groups[groupId].Owners.GetAsync(config =>
                         {
-                            config.QueryParameters.Select = GetUserSelectFields();
+                            config.QueryParameters.Select = resolvedQueryOptions.GetUserSelectOrDefault();
+                            
+                            if (resolvedQueryOptions.Expand?.Any() == true)
+                            {
+                                config.QueryParameters.Expand = resolvedQueryOptions.Expand;
+                            }
                         });
                     }
 
@@ -369,7 +413,7 @@ namespace AzureExternalDirectory.Application.GroupService
 
                 client = await _graphServiceFactory.CreateSystemClientAsync(_azureAdConfiguration);
 
-                // Üyeleri sayfa sayfa çek ve say
+                // Üyeleri sadece ID ile getir (performans için)
                 var allMembers = new List<DirectoryObject>();
                 string? nextPageUrl = null;
                 int totalCount = 0;
@@ -462,13 +506,16 @@ namespace AzureExternalDirectory.Application.GroupService
             }
         }
 
-        // 10. Alt grupları getir
-        public async Task<List<GroupDto>> GetSubGroupsAsync(string groupId)
+        // 10. Alt grupları getir (parametrik select/expand)
+        public async Task<List<GroupDto>> GetSubGroupsAsync(string groupId, GraphQueryOptions? queryOptions = null)
         {
             GraphServiceClient? client = null;
             try
             {
-                _logger.LogInformation("Alt gruplar getiriliyor. GroupId: {GroupId}", groupId);
+                var resolvedQueryOptions = queryOptions ?? new GraphQueryOptions();
+                
+                _logger.LogInformation("Alt gruplar getiriliyor. GroupId: {GroupId}, Select: {@Select}", 
+                    groupId, resolvedQueryOptions.Select);
 
                 client = await _graphServiceFactory.CreateSystemClientAsync(_azureAdConfiguration);
 
@@ -487,7 +534,12 @@ namespace AzureExternalDirectory.Application.GroupService
                     {
                         members = await client.Groups[groupId].Members.GetAsync(config =>
                         {
-                            config.QueryParameters.Select = GetGroupSelectFields();
+                            config.QueryParameters.Select = resolvedQueryOptions.GetGroupSelectOrDefault();
+                            
+                            if (resolvedQueryOptions.Expand?.Any() == true)
+                            {
+                                config.QueryParameters.Expand = resolvedQueryOptions.Expand;
+                            }
                         });
                     }
 
@@ -524,13 +576,16 @@ namespace AzureExternalDirectory.Application.GroupService
             }
         }
 
-        // 11. Üst grupları getir
-        public async Task<List<GroupDto>> GetParentGroupsAsync(string groupId)
+        // 11. Üst grupları getir (parametrik select/expand)
+        public async Task<List<GroupDto>> GetParentGroupsAsync(string groupId, GraphQueryOptions? queryOptions = null)
         {
             GraphServiceClient? client = null;
             try
             {
-                _logger.LogInformation("Üst gruplar getiriliyor. GroupId: {GroupId}", groupId);
+                var resolvedQueryOptions = queryOptions ?? new GraphQueryOptions();
+                
+                _logger.LogInformation("Üst gruplar getiriliyor. GroupId: {GroupId}, Select: {@Select}", 
+                    groupId, resolvedQueryOptions.Select);
 
                 client = await _graphServiceFactory.CreateSystemClientAsync(_azureAdConfiguration);
 
@@ -549,7 +604,12 @@ namespace AzureExternalDirectory.Application.GroupService
                     {
                         memberOf = await client.Groups[groupId].MemberOf.GetAsync(config =>
                         {
-                            config.QueryParameters.Select = GetGroupSelectFields();
+                            config.QueryParameters.Select = resolvedQueryOptions.GetGroupSelectOrDefault();
+                            
+                            if (resolvedQueryOptions.Expand?.Any() == true)
+                            {
+                                config.QueryParameters.Expand = resolvedQueryOptions.Expand;
+                            }
                         });
                     }
 
@@ -586,9 +646,10 @@ namespace AzureExternalDirectory.Application.GroupService
             }
         }
 
-        // Helper method - GetGroupMembersAsync'in internal versiyonu
-        private async Task<List<UserDto>> GetGroupMembersInternalAsync(GraphServiceClient client, string groupId)
+        // Helper method - GetGroupMembersAsync'in internal versiyonu (parametrik select/expand)
+        private async Task<List<UserDto>> GetGroupMembersInternalAsync(GraphServiceClient client, string groupId, GraphQueryOptions? queryOptions = null)
         {
+            var resolvedQueryOptions = queryOptions ?? new GraphQueryOptions();
             var allMembers = new List<DirectoryObject>();
             string? nextPageUrl = null;
 
@@ -604,7 +665,12 @@ namespace AzureExternalDirectory.Application.GroupService
                 {
                     members = await client.Groups[groupId].Members.GetAsync(config =>
                     {
-                        config.QueryParameters.Select = GetUserSelectFields();
+                        config.QueryParameters.Select = resolvedQueryOptions.GetUserSelectOrDefault();
+                        
+                        if (resolvedQueryOptions.Expand?.Any() == true)
+                        {
+                            config.QueryParameters.Expand = resolvedQueryOptions.Expand;
+                        }
                     });
                 }
 
@@ -639,13 +705,13 @@ namespace AzureExternalDirectory.Application.GroupService
                 Description = group.Description ?? string.Empty,
                 GroupTypes = group.GroupTypes?.ToList() ?? new List<string>(),
                 SecurityEnabled = group.SecurityEnabled ?? false,
-                MailEnabled = group.MailEnabled ?? false
+                MailEnabled = group.MailEnabled ?? false,
             };
         }
 
         private static UserDto MapUserToDto(User user)
         {
-            return new UserDto
+            var userDto = new UserDto
             {
                 Id = user.Id ?? string.Empty,
                 DisplayName = user.DisplayName ?? string.Empty,
@@ -656,41 +722,19 @@ namespace AzureExternalDirectory.Application.GroupService
                 OfficeLocation = user.OfficeLocation ?? string.Empty,
                 MobilePhone = user.MobilePhone ?? string.Empty,
                 BusinessPhones = user.BusinessPhones?.ToList() ?? new List<string>(),
-                AccountEnabled = user.AccountEnabled ?? false
+                AccountEnabled = user.AccountEnabled ?? false,
             };
-        }
 
-        // Field selection helper metodları
-        private static string[] GetGroupSelectFields()
-        {
-            return new[]
+            // Expand edilen grup bilgilerini işle
+            if (user.MemberOf?.Any() == true)
             {
-                "id",
-                "displayName",
-                "mail",
-                "mailNickname",
-                "description",
-                "groupTypes",
-                "securityEnabled",
-                "mailEnabled"
-            };
-        }
+                userDto.Groups = user.MemberOf
+                    .OfType<Group>()
+                    .Select(MapGroupToDto)
+                    .ToList();
+            }
 
-        private static string[] GetUserSelectFields()
-        {
-            return new[]
-            {
-                "id",
-                "displayName",
-                "mail",
-                "userPrincipalName",
-                "jobTitle",
-                "department",
-                "officeLocation",
-                "mobilePhone",
-                "businessPhones",
-                "accountEnabled"
-            };
+            return userDto;
         }
     }
 }

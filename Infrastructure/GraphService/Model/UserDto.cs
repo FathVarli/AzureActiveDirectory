@@ -13,6 +13,8 @@ namespace AzureExternalDirectory.Infrastructure.GraphService.Model
         public string OfficeLocation { get; set; } = string.Empty;
         public string MobilePhone { get; set; } = string.Empty;
         public List<string> BusinessPhones { get; set; } = new List<string>();
-        public bool AccountEnabled { get; set; }
+        public bool AccountEnabled { get; set; } = false;
+        public List<GroupDto> Groups { get; set; } = new List<GroupDto>();
+        public List<string> GroupIds { get; set; } = new List<string>();
     }
 }
